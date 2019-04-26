@@ -5,6 +5,7 @@ import (
 	"github.com/go-redis/redis"
 	uuid "github.com/satori/go.uuid"
 	"math/rand"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -16,12 +17,16 @@ const (
 	messagePartition        = "messagePartition"
 	generatorHeartbeatQueue = "generatorHeartbeatQueue"
 	electionQueue           = "electionQueue"
+	errorList               = "errorList"
 	queueLen                = 1000
+	getErrorModKey          = "getErrors"
 )
 
 var appUUID = uuid.Must(uuid.NewV4()).String()
 
 func main() {
+	args := os.Args[1:]
+
 	client := redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
 		Password: "",
@@ -31,6 +36,16 @@ func main() {
 	_, err := client.Ping().Result()
 	if err != nil {
 		panic(err)
+	}
+
+	if len(args) >= 1 && args[0] == getErrorModKey {
+		for {
+			outerErr := client.LPop(errorList).Val()
+			fmt.Println(outerErr)
+			if outerErr == "" {
+				return
+			}
+		}
 	}
 
 	handleMessages(client)
@@ -61,7 +76,9 @@ func handleMessages(client *redis.Client) {
 			i, payload := splittedInfo[0], splittedInfo[1]
 
 			if client.HSetNX(messagePartition, i, 1).Val() {
-				if payload == "0" {
+				random := rand.Intn(19)
+				if random == 0 {
+					client.LPush(errorList, payload)
 					fmt.Println(i, "error")
 				} else {
 					fmt.Println(i, payload)
@@ -106,7 +123,7 @@ func listen(generatorHeartbeat <-chan *redis.Message, client *redis.Client) {
 }
 
 func generateMessages(client *redis.Client) {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(500 * time.Millisecond)
 
 	go beat(client)
 
@@ -128,8 +145,8 @@ func generateMessages(client *redis.Client) {
 			panic(err)
 		}
 
-		random := rand.Intn(19)
-		err = client.Publish(messageQueue, fmt.Sprintf("%d:%d", i, random)).Err()
+		randomUUID := uuid.Must(uuid.NewV4()).String()
+		err = client.Publish(messageQueue, fmt.Sprintf("%d:%s", i, randomUUID)).Err()
 		if err != nil {
 			panic(err)
 		}
