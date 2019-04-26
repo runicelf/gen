@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/go-redis/redis"
 	uuid "github.com/satori/go.uuid"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -60,7 +61,11 @@ func handleMessages(client *redis.Client) {
 			i, payload := splittedInfo[0], splittedInfo[1]
 
 			if client.HSetNX(messagePartition, i, 1).Val() {
-				fmt.Println(i, payload)
+				if payload == "0" {
+					fmt.Println(i, "error")
+				} else {
+					fmt.Println(i, payload)
+				}
 			}
 		}
 	}
@@ -76,9 +81,8 @@ func subscribe(client *redis.Client, pattern string) <-chan *redis.Message {
 }
 
 func switchAfterTimeout(flag *bool) {
-	<-time.After(30 * time.Second)
-	b := true
-	flag = &b
+	<-time.After(5 * time.Second)
+	*flag = true
 }
 
 func listen(generatorHeartbeat <-chan *redis.Message, client *redis.Client) {
@@ -93,6 +97,7 @@ func listen(generatorHeartbeat <-chan *redis.Message, client *redis.Client) {
 				if err != nil {
 					panic(err)
 				}
+				lastHeartbeat = time.Now()
 			}
 		case <-generatorHeartbeat:
 			lastHeartbeat = time.Now()
@@ -100,19 +105,7 @@ func listen(generatorHeartbeat <-chan *redis.Message, client *redis.Client) {
 	}
 }
 
-func beat(client *redis.Client) {
-	ticker := time.NewTicker(1 * time.Second)
-
-	for range ticker.C {
-		err := client.Publish(generatorHeartbeatQueue, 1).Err()
-		if err != nil {
-			panic(err)
-		}
-	}
-}
-
 func generateMessages(client *redis.Client) {
-	fmt.Println("gen")
 	ticker := time.NewTicker(1 * time.Second)
 
 	go beat(client)
@@ -135,7 +128,8 @@ func generateMessages(client *redis.Client) {
 			panic(err)
 		}
 
-		err = client.Publish(messageQueue, fmt.Sprintf("%d:hello", i)).Err()
+		random := rand.Intn(19)
+		err = client.Publish(messageQueue, fmt.Sprintf("%d:%d", i, random)).Err()
 		if err != nil {
 			panic(err)
 		}
@@ -148,6 +142,17 @@ func generateMessages(client *redis.Client) {
 		i++
 		if i >= queueLen {
 			i = 0
+		}
+	}
+}
+
+func beat(client *redis.Client) {
+	ticker := time.NewTicker(1 * time.Second)
+
+	for range ticker.C {
+		err := client.Publish(generatorHeartbeatQueue, 1).Err()
+		if err != nil {
+			panic(err)
 		}
 	}
 }
